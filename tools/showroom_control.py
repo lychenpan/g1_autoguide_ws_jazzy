@@ -22,7 +22,7 @@ from typing import Any, Optional
 from urllib.parse import urljoin
 
 # --- CONFIG (edit here or set SHOWROOM_BASE_URL) ---
-DEFAULT_BASE_URL = "http://16a1cd43.r11.cpolar.top"
+DEFAULT_BASE_URL = "http://showroomweb.cpolar.top"
 DEFAULT_TIMEOUT = 30.0
 # --- end CONFIG ---
 

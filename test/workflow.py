@@ -22,6 +22,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import Empty
 from showroom_control import next_page, play_video
@@ -42,6 +43,11 @@ TEST = True
 if "SHOWROOM_TEST" in os.environ:
     TEST = os.environ["SHOWROOM_TEST"].lower() in ("1", "true", "yes")
 TEST_TTS_MAX_CHARS = 15
+
+# True = 3-step nav (align path yaw, translate, final rotate); False = single goal to B.
+NAV_TWO_STAGE = True
+if "NAV_TWO_STAGE" in os.environ:
+    NAV_TWO_STAGE = os.environ["NAV_TWO_STAGE"].lower() in ("1", "true", "yes")
 
 
 def text_for_tts(text: str) -> str:
@@ -138,6 +144,35 @@ def yaw_to_quat(yaw: float):
     return math.sin(yaw / 2.0), math.cos(yaw / 2.0)
 
 
+def quat_to_yaw(qx: float, qy: float, qz: float, qw: float) -> float:
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def normalize_angle(angle: float) -> float:
+    while angle > math.pi:
+        angle -= 2.0 * math.pi
+    while angle < -math.pi:
+        angle += 2.0 * math.pi
+    return angle
+
+
+def angle_diff_deg(a: float, b: float) -> float:
+    return abs(math.degrees(normalize_angle(a - b)))
+
+
+def path_yaw_from_points(ax: float, ay: float, bx: float, by: float) -> float:
+    """Yaw of line A->B in map frame (same frame as goals and /unitree/odom)."""
+    return math.atan2(by - ay, bx - ax)
+
+
+ODOM_TOPIC = "/unitree/odom"
+DEFAULT_NAV_ALIGN_THRESH_DEG = 50.0
+MIN_PATH_DIST_M = 0.05
+FINAL_YAW_SKIP_THRESH_DEG = 10
+
+
 class ShowroomWorkflowNode(Node):
     """ROS 2 node: wait for start topic, then run 8 navigate + TTS steps."""
 
@@ -153,6 +188,10 @@ class ShowroomWorkflowNode(Node):
         self._pending_start = False
         self._mission_thread: threading.Thread | None = None
         self._nav_client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
+        self._latest_odom: tuple[float, float, float] | None = None
+        self._odom_sub = self.create_subscription(
+            Odometry, ODOM_TOPIC, self._on_odom, 10
+        )
         self.create_subscription(Empty, MISSION_START_TOPIC, self._on_start_request, 10)
         self.create_timer(0.2, self._mission_timer_cb)
         self.get_logger().info(
@@ -161,6 +200,27 @@ class ShowroomWorkflowNode(Node):
         self.get_logger().info(
             f"Publish std_msgs/Empty to {MISSION_START_TOPIC} to begin mission"
         )
+
+    def _on_odom(self, msg: Odometry) -> None:
+        pos = msg.pose.pose.position
+        ori = msg.pose.pose.orientation
+        self._latest_odom = (
+            float(pos.x),
+            float(pos.y),
+            quat_to_yaw(ori.x, ori.y, ori.z, ori.w),
+        )
+
+    def _get_robot_pose(
+        self, timeout_sec: float = 5.0
+    ) -> tuple[float, float, float] | None:
+        if self._latest_odom is not None:
+            return self._latest_odom
+        deadline = time.monotonic() + timeout_sec
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self._latest_odom is not None:
+                return self._latest_odom
+        return None
 
     def _on_start_request(self, _msg: Empty) -> None:
         if self._running:
@@ -189,8 +249,13 @@ class ShowroomWorkflowNode(Node):
         finally:
             self._running = False
 
-    def navigate_blocking(
-        self, x: float, y: float, yaw: float, timeout_sec: float = 300.0
+    def _send_nav_goal_blocking(
+        self,
+        x: float,
+        y: float,
+        yaw: float,
+        timeout_sec: float,
+        label: str = "",
     ):
         self.get_logger().info("Step[NAV]: waiting for /navigate_to_pose action server")
         if not self._nav_client.wait_for_server(timeout_sec=5.0):
@@ -208,8 +273,9 @@ class ShowroomWorkflowNode(Node):
         goal.pose.pose.orientation.z = qz
         goal.pose.pose.orientation.w = qw
 
+        prefix = f"{label} " if label else ""
         self.get_logger().info(
-            f"Step[NAV]: sending goal x={x:.5f}, y={y:.5f}, yaw={yaw:.5f}"
+            f"Step[NAV]: {prefix}sending goal x={x:.5f}, y={y:.5f}, yaw={yaw:.5f}"
         )
         send_future = self._nav_client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, send_future, timeout_sec=timeout_sec)
@@ -229,9 +295,102 @@ class ShowroomWorkflowNode(Node):
 
         wrapped = result_future.result()
         self.get_logger().info(
-            f"Step[NAV]: status={wrapped.status}({nav_status_to_text(wrapped.status)})"
+            f"Step[NAV]: {prefix}status={wrapped.status}"
+            f"({nav_status_to_text(wrapped.status)})"
         )
         return wrapped.status, wrapped.result
+
+    def navigate_blocking(
+        self,
+        x: float,
+        y: float,
+        yaw: float,
+        timeout_sec: float = 300.0,
+        align_threshold_deg: float | None = None,
+    ):
+        """Navigate to (x, y, yaw). Single goal if NAV_TWO_STAGE is False, else 3-step."""
+        if not NAV_TWO_STAGE:
+            return self._send_nav_goal_blocking(x, y, yaw, timeout_sec)
+
+        if align_threshold_deg is None:
+            align_threshold_deg = float(
+                os.environ.get(
+                    "SHOWROOM_NAV_ALIGN_THRESH_DEG",
+                    str(DEFAULT_NAV_ALIGN_THRESH_DEG),
+                )
+            )
+
+        target_yaw = yaw
+        pose = self._get_robot_pose()
+        if pose is None:
+            self.get_logger().error(f"No pose on {ODOM_TOPIC}, cannot navigate")
+            return None
+
+        ax, ay, robot_yaw = pose
+        dist = math.hypot(x - ax, y - ay)
+        if dist >= MIN_PATH_DIST_M:
+            line_yaw = path_yaw_from_points(ax, ay, x, y)
+        else:
+            line_yaw = robot_yaw
+            self.get_logger().info(
+                f"Step[NAV]: already near target ({dist:.3f} m), skip path alignment"
+            )
+
+        self.get_logger().info(
+            f"Step[NAV]: A=({ax:.5f}, {ay:.5f}, yaw={robot_yaw:.5f}), "
+            f"B=({x:.5f}, {y:.5f}, yaw={target_yaw:.5f}), "
+            f"path_yaw={line_yaw:.5f}, dist={dist:.3f} m"
+        )
+
+        yaw_delta = angle_diff_deg(robot_yaw, line_yaw)
+        if dist >= MIN_PATH_DIST_M and yaw_delta > align_threshold_deg:
+            self.get_logger().info(
+                f"Step[NAV]: (1/3) rotate to path yaw "
+                f"(delta={yaw_delta:.1f}° > {align_threshold_deg:.1f}°)"
+            )
+            out = self._send_nav_goal_blocking(
+                ax, ay, line_yaw, timeout_sec, label="(1/3 align)"
+            )
+            if out is None or out[0] != GoalStatus.STATUS_SUCCEEDED:
+                return out
+        else:
+            self.get_logger().info(
+                f"Step[NAV]: (1/3) skip path-yaw align "
+                f"(delta={yaw_delta:.1f}° <= {align_threshold_deg:.1f}°)"
+            )
+
+        if dist >= MIN_PATH_DIST_M:
+            self.get_logger().info(
+                f"Step[NAV]: (2/3) move to B with path yaw={line_yaw:.5f}"
+            )
+            out = self._send_nav_goal_blocking(
+                x, y, line_yaw, timeout_sec, label="(2/3 translate)"
+            )
+            if out is None or out[0] != GoalStatus.STATUS_SUCCEEDED:
+                return out
+        else:
+            self.get_logger().info("Step[NAV]: (2/3) skip translation (already at B)")
+
+        final_delta = angle_diff_deg(line_yaw, target_yaw)
+        ## 
+        pose = self._get_robot_pose()
+        ax, ay, robot_yaw = pose
+        
+        if final_delta > FINAL_YAW_SKIP_THRESH_DEG:
+            self.get_logger().info(
+                f"Step[NAV]: (3/3) final rotation to target yaw={target_yaw:.5f} "
+                f"(delta={final_delta:.1f}°)"
+            )
+            out = self._send_nav_goal_blocking(
+                ax, ay, target_yaw, timeout_sec, label="(3/3 rotate)"
+            )
+            return out
+
+        self.get_logger().info(
+            f"Step[NAV]: (3/3) skip final rotation "
+            f"(delta={final_delta:.1f}° <= {FINAL_YAW_SKIP_THRESH_DEG:.1f}°)"
+        )
+        return GoalStatus.STATUS_SUCCEEDED, None
 
     def _advance_ppt_slide(self, stop_idx: int, part_idx: int) -> None:
         n = stop_idx - FIXED_SPEAK_STOPS
@@ -284,6 +443,10 @@ class ShowroomWorkflowNode(Node):
             self.get_logger().info(
                 f"TEST mode: TTS limited to first {TEST_TTS_MAX_CHARS} characters per line"
             )
+        self.get_logger().info(
+            f"NAV_TWO_STAGE={'on' if NAV_TWO_STAGE else 'off'} "
+            f"({'3-step path-yaw nav' if NAV_TWO_STAGE else 'direct goal to B'})"
+        )
 
         for stop_idx, ((x, y, yaw), voice_texts) in enumerate(self._mission_steps, start=1):
             self.get_logger().info(f"--- Stop {stop_idx}/{total} begin ---")
