@@ -3,6 +3,7 @@ Unitree SLAM + Nav2 bringup for ROS 2 Jazzy using nav2_ws overlay.
 
 This launch starts:
   - static map->odom TF
+  - static base_link->livox_frame TF
   - map_server
   - unitree_relocation_odom_bridge (python3 script)
   - Nav2 navigation stack from /workspace/nav2_ws
@@ -84,6 +85,22 @@ def generate_launch_description():
                 executable="static_transform_publisher",
                 name="map_to_odom",
                 arguments=["0", "0", "0", "0", "0", "0", "map", "odom"],
+                output="screen",
+            ),
+            Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="base_link_to_livox_frame",
+                arguments=[
+                    "0",
+                    "0",
+                    "1.3",
+                    "0",
+                    "0.047",
+                    "3.141592653589793",
+                    "base_link",
+                    "livox_frame",
+                ],
                 output="screen",
             ),
             Node(

@@ -12,7 +12,7 @@ import wave
 from dataclasses import dataclass
 from typing import Optional
 import sys
-sys.path.append("/home/unitree/workspace/unitree_sdk2_python")
+# sys.path.append("/home/unitree/workspace/unitree_sdk2_python")
 
 _PING_DISABLED = frozenset({"none", "null", "", "off", "disable", "disabled"})
 
@@ -25,6 +25,38 @@ def _ws_ping_from_env(name: str) -> Optional[float]:
     if raw in _PING_DISABLED:
         return None
     return float(raw)
+
+VOICE_STREAM_GAIN = 1.5
+
+def apply_pcm16_gain(pcm: bytes) -> bytes:
+    """PCM16LE mono: multiply samples by gain and clip to int16 (same idea as app._to_pcm16le_16k)."""
+    gain = VOICE_STREAM_GAIN
+    if gain == 1.0 or not pcm:
+        return pcm
+    n = len(pcm) - (len(pcm) % 2)
+    if n == 0:
+        return b""
+    pcm = pcm[:n]
+    try:
+        import numpy as np
+
+        x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+        x = np.clip(x * float(gain), -32768, 32767).astype(np.int16)
+        return x.tobytes()
+    except ImportError:
+        import array
+
+        samples = array.array("h")
+        samples.frombytes(pcm)
+        g = float(gain)
+        for i in range(len(samples)):
+            v = int(samples[i] * g)
+            if v > 32767:
+                v = 32767
+            elif v < -32768:
+                v = -32768
+            samples[i] = v
+        return samples.tobytes()
 
 
 @dataclass
@@ -429,6 +461,7 @@ class RemoteTTSPlayer:
                             )
 
                         # Backpressure is OK: block until playback consumes.
+                        msg = apply_pcm16_gain(msg)
                         bytes_in += len(msg)
                         frames_in += 1
                         with self._count_lock:

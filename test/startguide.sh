@@ -1,0 +1,1 @@
+ros2 topic pub --once /showroom_mission/start std_msgs/msg/Empty "{}"

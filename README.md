@@ -17,8 +17,11 @@ Python-only bringup for Unitree G1 SLAM + Nav2 on ROS 2 Jazzy. This repo provide
    ```bash
    ./runcmd.sh
    ```
+3. **Start pointcloud bridge**
 
-3. **Start Nav2**
+   python3 nodes/utlidar_pcl_bridge.py
+
+4. **Start Nav2**
 
    ```bash
    ./startnav2.sh
@@ -27,7 +30,7 @@ Python-only bringup for Unitree G1 SLAM + Nav2 on ROS 2 Jazzy. This repo provide
    Startup sequence should be:
    `startslam.sh` -> `runcmd.sh` -> `startnav2.sh`.
 
-4. **Send a navigation goal**
+5. **Send a navigation goal**
 
    ```bash
    ./send_goal.sh <x> <y> <yaw_degrees>
