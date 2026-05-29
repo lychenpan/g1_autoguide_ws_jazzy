@@ -1,0 +1,1 @@
+ros2 run cmd_vel_bridge cmd_vel_bridge --ros-args -p print_cmd_vel_log:=true

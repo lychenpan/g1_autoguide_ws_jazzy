@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ROS 2 / colcon (not used by default, but ignore if created)
+install/
+log/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and local runtime
+*.log
+logs/
+
+# Secrets / local env
+.env
+.env.*
+*.pem
+
+# Large SLAM artifacts (keep map.yaml / map.png if you version the default map)
+*.pcd
+*.pgm
+# Uncomment if map.png is regenerated locally and should not be committed:
+# g1_api/map.png
+
+# Local overrides (optional naming convention)
+*_local.yaml
+*_local.sh
+
