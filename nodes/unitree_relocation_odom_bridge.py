@@ -45,8 +45,10 @@ class UnitreeRelocationOdomBridge(Node):
 
     def _dds_to_ros_odometry(self, msg: OdometryDds) -> Odometry:
         odom = Odometry()
-        parent_frame = msg.header.frame_id or DEFAULT_PARENT_FRAME
-        child_frame = msg.child_frame_id or DEFAULT_CHILD_FRAME
+        # parent_frame = msg.header.frame_id or DEFAULT_PARENT_FRAME
+        # child_frame = msg.child_frame_id or DEFAULT_CHILD_FRAME
+        parent_frame = DEFAULT_PARENT_FRAME
+        child_frame = DEFAULT_CHILD_FRAME
 
         if not self._warned_frames and (
             parent_frame != DEFAULT_PARENT_FRAME or child_frame != DEFAULT_CHILD_FRAME
@@ -85,8 +87,12 @@ class UnitreeRelocationOdomBridge(Node):
     def _publish_tf(self, odom: Odometry):
         tf = TransformStamped()
         tf.header.stamp = odom.header.stamp
-        tf.header.frame_id = odom.header.frame_id
-        tf.child_frame_id = odom.child_frame_id
+        # tf.header.frame_id = odom.header.frame_id
+        # tf.child_frame_id = odom.child_frame_id
+        
+        tf.header.frame_id = DEFAULT_PARENT_FRAME
+        tf.child_frame_id = DEFAULT_CHILD_FRAME
+
         tf.transform.translation.x = odom.pose.pose.position.x
         tf.transform.translation.y = odom.pose.pose.position.y
         tf.transform.translation.z = odom.pose.pose.position.z
