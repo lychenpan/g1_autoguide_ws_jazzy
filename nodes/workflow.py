@@ -376,16 +376,20 @@ class ShowroomWorkflowNode(Node):
         else:
             self.get_logger().info("Step[NAV]: (2/3) skip translation (already at B)")
 
+        time.sleep(3.0)
+
         final_delta = angle_diff_deg(line_yaw, target_yaw)
         ## 
-        pose = self._get_robot_pose()
-        ax, ay, robot_yaw = pose
+        
         
         if final_delta > FINAL_YAW_SKIP_THRESH_DEG:
             self.get_logger().info(
                 f"Step[NAV]: (3/3) final rotation to target yaw={target_yaw:.5f} "
                 f"(delta={final_delta:.1f}°)"
             )
+            pose = self._get_robot_pose()
+            ax, ay, robot_yaw = pose
+            print("debug-----", ax, ay, robot_yaw, target_yaw)
             out = self._send_nav_goal_blocking(
                 ax, ay, target_yaw, timeout_sec, label="(3/3 rotate)"
             )

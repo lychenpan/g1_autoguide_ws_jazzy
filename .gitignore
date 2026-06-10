@@ -18,6 +18,7 @@ venv/
 # ROS 2 / colcon (not used by default, but ignore if created)
 install/
 log/
+logs/
 olds/
 
 # IDE / editor

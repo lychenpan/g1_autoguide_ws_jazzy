@@ -1,0 +1,1 @@
+curl -sS -m 30 'http://showroomweb.cpolar.top/api/send_udp?command=PlayVideo'

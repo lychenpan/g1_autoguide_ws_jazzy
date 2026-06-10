@@ -6,16 +6,14 @@ Subscribes to rt/wirelesscontroller (type unitree_go.msg.dds_.WirelessController
 on DDS domain 0 and prints sticks + decoded button states.
 
 Usage (inside cp1-jazzy / cp2-jazzy):
-  python3 /workspace/g1_ws_jazzy/nodes/testw.py
-  python3 /workspace/g1_ws_jazzy/nodes/testw.py --iface eth0
-  python3 /workspace/g1_ws_jazzy/nodes/testw.py --only-on-change
-  python3 /workspace/g1_ws_jazzy/nodes/testw.py --combo L1,A,B --combo-hold-secs 2
+  python3 /workspace/g1_ws_jazzy/nodes/unitree_controller_node.py
 """
 
 from __future__ import annotations
 
-import argparse
+import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass, fields
 from typing import Callable, FrozenSet
@@ -25,18 +23,37 @@ from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscri
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
 
 DDS_TOPIC = "rt/wirelesscontroller"
-DEFAULT_IFACE = "eth0"
-DEFAULT_DOMAIN = 0
-DEFAULT_COMBO = ("L1", "A", "B")
-DEFAULT_COMBO_HOLD_SECS = 2.0
+IFACE = "eth0"
+DOMAIN = 0
+QUEUE_LEN = 10
+PRINT_EVERY = 10
+ONLY_ON_CHANGE = False
+VERBOSE = False
+BUTTON_COUNT = 3
+HOLD_SECS = 1.0
 
+def send_voice_state(state: str) -> None:
+    """Send state data to voice."""
+    import requests
+
+    BASE = "http://localhost:10011"
+    print(str)
+    r = requests.post(
+        f"{BASE}/api/speak",
+        json={"text": state, "wait": True},
+        timeout=60)
+    r.raise_for_status()
+    print(r.json())
 
 def on_combo_triggered(combo: FrozenSet[str], hold_secs: float) -> None:
-    """Called once when the configured 3-button combo is held long enough."""
-    combo_str = "+".join(sorted(combo))
+    """Called once when any 3-button combo is held long enough."""
+    combo_str = "   ".join(sorted(combo))
     print(f"\n*** COMBO TRIGGERED: {combo_str} held {hold_secs:.1f}s ***\n")
+    send_voice_state(f"Combo triggered: {combo_str} ")
+    print("sendvoicestate")
     if {"R1", "L1", "Up"}.issubset(combo):
-        publish_mission_start(f"{DEFAULT_START_MESSAGE}:{combo_str}")
+        publish_mission_start(f"------------{DEFAULT_START_MESSAGE}:{combo_str}")
+
 
 @dataclass
 class StickState:
@@ -97,54 +114,48 @@ class ButtonState:
         return frozenset(self.pressed_names())
 
 
-def parse_combo(text: str) -> frozenset[str]:
-    names = [part.strip() for part in text.split(",") if part.strip()]
-    if len(names) != 3:
-        raise ValueError(f"combo must contain exactly 3 buttons, got {len(names)}: {text!r}")
-    valid = {f.name for f in fields(ButtonState)}
-    unknown = [name for name in names if name not in valid]
-    if unknown:
-        raise ValueError(f"unknown button(s): {', '.join(unknown)} (valid: {', '.join(sorted(valid))})")
-    return frozenset(names)
-
-
-
-    
-
-
-class ComboHoldDetector:
-    """Fire a callback when an exact 3-button combo is held for hold_secs."""
+class TripleButtonHoldDetector:
+    """Fire a callback when exactly button_count buttons are held for hold_secs."""
 
     def __init__(
         self,
-        combo: FrozenSet[str],
+        button_count: int,
         hold_secs: float,
         on_trigger: Callable[[FrozenSet[str], float], None],
     ) -> None:
-        self.combo = combo
+        self.button_count = button_count
         self.hold_secs = hold_secs
         self.on_trigger = on_trigger
         self._hold_start: float | None = None
-        self._triggered = False
+        self._active_combo: FrozenSet[str] | None = None
+        self._triggered_combo: FrozenSet[str] | None = None
 
     def update(self, buttons: ButtonState) -> None:
-        if buttons.pressed_set() != self.combo:
+        pressed = buttons.pressed_set()
+
+        if len(pressed) != self.button_count:
             self._hold_start = None
-            self._triggered = False
+            self._active_combo = None
+            self._triggered_combo = None
             return
+
+        if pressed != self._active_combo:
+            self._active_combo = pressed
+            self._hold_start = None
+            self._triggered_combo = None
 
         now = time.monotonic()
         if self._hold_start is None:
             self._hold_start = now
             return
 
-        if self._triggered:
+        if self._triggered_combo == pressed:
             return
 
         elapsed = now - self._hold_start
         if elapsed >= self.hold_secs:
-            self._triggered = True
-            self.on_trigger(self.combo, elapsed)
+            self._triggered_combo = pressed
+            self.on_trigger(pressed, elapsed)
 
 
 @dataclass
@@ -184,48 +195,43 @@ class RemoteSnapshot:
 
 
 class WirelessReader:
-    def __init__(self, args: argparse.Namespace):
-        self.args = args
+    def __init__(self) -> None:
         self.seq = 0
         self.last: RemoteSnapshot | None = None
         self.sub: ChannelSubscriber | None = None
-        self.combo_detector: ComboHoldDetector | None = None
-        if args.combo is not None:
-            self.combo_detector = ComboHoldDetector(
-                combo=parse_combo(args.combo),
-                hold_secs=args.combo_hold_secs,
-                on_trigger=on_combo_triggered,
-            )
+        self._stop_event = threading.Event()
+        self.combo_detector = TripleButtonHoldDetector(
+            button_count=BUTTON_COUNT,
+            hold_secs=HOLD_SECS,
+            on_trigger=on_combo_triggered,
+        )
 
     def start(self) -> None:
         print(
-            f"Initializing DDS domain={self.args.domain} iface={self.args.iface!r} "
+            f"Initializing DDS domain={DOMAIN} iface={IFACE!r} "
             f"topic={DDS_TOPIC}"
         )
-        ChannelFactoryInitialize(self.args.domain, self.args.iface)
+        ChannelFactoryInitialize(DOMAIN, IFACE)
         self.sub = ChannelSubscriber(DDS_TOPIC, WirelessController_)
-        self.sub.Init(self._on_message, self.args.queue_len)
+        self.sub.Init(self._on_message, QUEUE_LEN)
         print("Listening (Ctrl+C to stop)...")
-        if self.combo_detector is not None:
-            combo_str = "+".join(sorted(self.combo_detector.combo))
-            print(
-                f"Combo watch: hold {combo_str} together for "
-                f"{self.combo_detector.hold_secs:.1f}s to trigger"
-            )
+        print(
+            f"Combo watch: hold any {self.combo_detector.button_count} buttons "
+            f"together for {self.combo_detector.hold_secs:.1f}s to trigger"
+        )
 
     def _on_message(self, msg: WirelessController_) -> None:
         self.seq += 1
         snap = RemoteSnapshot.from_msg(msg)
 
-        if self.combo_detector is not None:
-            self.combo_detector.update(snap.buttons)
+        self.combo_detector.update(snap.buttons)
 
-        if self.args.only_on_change:
+        if ONLY_ON_CHANGE:
             if self.last is not None and self._same(self.last, snap):
                 return
 
-        if self.seq % self.args.print_every == 0 or self.args.print_every == 1:
-            if self.args.verbose:
+        if self.seq % PRINT_EVERY == 0 or PRINT_EVERY == 1:
+            if VERBOSE:
                 print(snap.format_detail(self.seq))
             else:
                 print(snap.format_line(self.seq))
@@ -240,76 +246,26 @@ class WirelessReader:
             and a.keys_raw == b.keys_raw
         )
 
+    def _request_stop(self, *_args) -> None:
+        self._stop_event.set()
+
     def run(self) -> None:
         self.start()
+        signal.signal(signal.SIGINT, self._request_stop)
+        signal.signal(signal.SIGTERM, self._request_stop)
         try:
-            while True:
-                time.sleep(0.1)
-        except KeyboardInterrupt:
+            # DDS delivers controller data in a background callback thread.
+            # Block the main thread until Ctrl+C or systemd sends SIGTERM.
+            self._stop_event.wait()
+        finally:
+            if self.sub is not None:
+                self.sub.Close()
             print(f"\nStopped after {self.seq} messages.")
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Read Unitree wireless controller via unitree_sdk2py DDS."
-    )
-    p.add_argument(
-        "--iface",
-        default=DEFAULT_IFACE,
-        help=f"Network interface for robot Ethernet (default: {DEFAULT_IFACE})",
-    )
-    p.add_argument(
-        "--domain",
-        type=int,
-        default=DEFAULT_DOMAIN,
-        help=f"DDS domain ID (robot uses {DEFAULT_DOMAIN})",
-    )
-    p.add_argument(
-        "--queue-len",
-        type=int,
-        default=10,
-        dest="queue_len",
-        help="Subscriber callback queue length",
-    )
-    p.add_argument(
-        "--print-every",
-        type=int,
-        default=10,
-        help="Print every N-th message (1 = every message)",
-    )
-    p.add_argument(
-        "--only-on-change",
-        action="store_true",
-        help="Print only when sticks or buttons change",
-    )
-    p.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Print multi-line detail including each pressed button",
-    )
-    p.add_argument(
-        "--combo",
-        metavar="BTN,BTN,BTN",
-        default=None,
-        help=(
-            "Watch a 3-button combo and trigger after --combo-hold-secs, "
-            f"e.g. L1,A,B (common G1 combo)"
-        ),
-    )
-    p.add_argument(
-        "--combo-hold-secs",
-        type=float,
-        default=DEFAULT_COMBO_HOLD_SECS,
-        help=f"Seconds all 3 combo buttons must be held (default: {DEFAULT_COMBO_HOLD_SECS})",
-    )
-    return p.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+def main() -> int:
     try:
-        WirelessReader(args).run()
+        WirelessReader().run()
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

@@ -35,7 +35,7 @@ def init_audio_client(network_interface: str = "eth0", volume: int = 300) -> Non
 def speak_text(text: str) -> None:
     with speak_lock:
         audio_client.TtsMaker(text, 1)
-        time.sleep(len(text) / CHARS_PER_SEC + 0.5)
+        time.sleep(len(text) / CHARS_PER_SEC / 4 + 0.5)
 
 
 @app.route("/health", methods=["GET"])

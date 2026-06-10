@@ -1,5 +1,5 @@
 [Unit]
-Description=G1 TTS Web Server and SLAM relocation at boot
+Description=G1 TTS web server, SLAM relocation, and wireless controller at boot
 Documentation=file:///home/unitree/workspace/dockerws/g1_ws_jazzy/tools/systemd/g1-tools-start.sh
 After=network-online.target
 Wants=network-online.target
@@ -13,8 +13,8 @@ EnvironmentFile=/home/unitree/workspace/dockerws/g1_ws_jazzy/tools/systemd/g1-to
 ExecStart=/home/unitree/workspace/dockerws/g1_ws_jazzy/tools/systemd/g1-tools-start.sh
 Restart=on-failure
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:/home/unitree/workspace/dockerws/g1_ws_jazzy/logs/g1-tools.log
+StandardError=append:/home/unitree/workspace/dockerws/g1_ws_jazzy/logs/g1-tools.err.log
 
 [Install]
 WantedBy=multi-user.target
