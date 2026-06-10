@@ -6,6 +6,22 @@ Python-only bringup for Unitree G1 SLAM + Nav2 on ROS 2 Jazzy. This repo provide
 
 ### env start: use robotenv1 to activate env.
 
+**Single command (recommended)** — one launch file, sequential startup:
+
+```bash
+./startnav2.sh
+```
+
+Order inside the launch file:
+
+1. `unitree_relocation_odom_bridge.py` + `utlidar_pcl_bridge.py`
+2. Wait for `/unitree/odom` and `/utlidar/pcl2`
+3. `cmd_vel_bridge` + static TFs + map_server + Nav2 stack
+
+Optional launch args: `bridge_wait_timeout:=90` `bridge_startup_delay:=3.0`
+
+### Manual / legacy (separate terminals)
+
 1. **Start SLAM + odom bridge**
 
    ```bash

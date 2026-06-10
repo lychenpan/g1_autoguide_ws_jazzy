@@ -134,6 +134,19 @@ def start_relocation(init_channel: bool = True) -> Tuple[int, Optional[str]]:
     return status_code, data
 
 
+def send_voice_state(state: str) -> None:
+    """Send state data to voice."""
+    import requests
+
+    BASE = "http://localhost:10011"
+    r = requests.post(
+        f"{BASE}/api/speak",
+        json={"text": state, "wait": True},
+        timeout=60)
+    r.raise_for_status()
+    print(r.json())
+
+
 def main() -> int:
     pose = _current_init_pose()
     print("=" * 70)
@@ -155,9 +168,13 @@ def main() -> int:
         print(f"OK: Relocation started with map {MAP_PATH}")
         if data:
             print(f"Response: {data}")
+            send_voice_state("relocation G1 slam successfully")
         return 0
 
     print(f"ERROR: Relocation failed, statusCode={status}, data={data}")
+    send_voice_state(f"ERROR: Relocation failed, statusCode={status}, data={data}")
+    ## send state data to voice 
+    
     return 1
 
 

@@ -36,38 +36,20 @@ class UtlidarPCLBridge(Node):
         except Exception as e:
             self.sub = None
             self.get_logger().error(f'Failed to init main subscriber: {e}')
-        # alt topic (with leading slash) for diagnostic
-        try:
-            alt_topic = '/' + UNITREE_PCL_TOPIC.lstrip('/')
-            self.sub_alt = ChannelSubscriber(alt_topic, PointCloud2Dds)
-            self.sub_alt.Init(self._pcl_callback_alt, 1)
-            self.get_logger().info(f'Subscribed to {alt_topic} (alt) for diagnostics')
-        except Exception as e:
-            self.sub_alt = None
-            self.get_logger().info(f'Alt subscriber init skipped/failed: {e}')
+        
         self.get_logger().info(f'Bridge initialized: DDS({UNITREE_PCL_TOPIC}) -> ROS2({ROS_PCL_TOPIC})')
         # periodic status log to show if any messages were received
-        self.create_timer(5.0, self._status_timer)
+        # self.create_timer(5.0, self._status_timer)
 
     def _pcl_callback(self, msg: PointCloud2Dds):
         try:
             self.recv_count += 1
             data_len = len(getattr(msg, 'data', b'')) if getattr(msg, 'data', None) else 0
-            self.get_logger().info(f'recv #{self.recv_count} main: width={getattr(msg, "width", 0)} data_len={data_len}')
+            # self.get_logger().info(f'recv #{self.recv_count} main: width={getattr(msg, "width", 0)} data_len={data_len}')
             pcl = self._dds_to_ros_pointcloud(msg)
             self.pcl_pub.publish(pcl)
         except Exception as e:
             self.get_logger().error(f'Callback error: {e}')
-
-    def _pcl_callback_alt(self, msg: PointCloud2Dds):
-        try:
-            self.recv_count_alt += 1
-            data_len = len(getattr(msg, 'data', b'')) if getattr(msg, 'data', None) else 0
-            self.get_logger().info(f'recv #{self.recv_count_alt} alt: width={getattr(msg, "width", 0)} data_len={data_len}')
-            pcl = self._dds_to_ros_pointcloud(msg)
-            self.pcl_pub.publish(pcl)
-        except Exception as e:
-            self.get_logger().error(f'Alt callback error: {e}')
 
     def _status_timer(self):
         self.get_logger().info(f'PCL recv counts: main={self.recv_count} alt={self.recv_count_alt}')

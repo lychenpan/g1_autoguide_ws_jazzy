@@ -56,7 +56,7 @@ class Hand3DNode(Node):
 
         # HTTP API for hand position (x;y;z) to handshake_server
         self.handd_url = f"{HANDSHAKE_SERVER_URL.rstrip('/')}/handshake/handd"
-        print(f"Handshake API: POST {self.handd_url} (x;y;z)")
+        self.get_logger().info(f"Handshake API: POST {self.handd_url} (x;y;z)")
 
         # MediaPipe
         self.mp_hands = mp.solutions.hands
@@ -88,7 +88,7 @@ class Hand3DNode(Node):
         # Recent hand detections for history
         self._recent_hands = []
 
-        print("Hand3DNode initialized")
+        self.get_logger().info("Hand3DNode initialized")
 
     def info_callback(self, msg):
         self.fx = msg.k[0]
@@ -106,7 +106,7 @@ class Hand3DNode(Node):
         """
         if not SAVEVIS or self.saved_once:
             return
-        print("--------------------------------")
+        self.get_logger().info("--------------------------------")
         if self.fx is None:
             self.get_logger().warn('Cannot save: camera_info not yet received')
             return
@@ -174,16 +174,25 @@ class Hand3DNode(Node):
                     headers={"Content-Type": "text/plain"},
                 )
                 with urllib.request.urlopen(req, timeout=5):
-                    print(f"[Hand 2s] HTTP handd request sent OK")
+                    self.get_logger().info("[Hand 2s] HTTP handd request sent OK")
             except urllib.error.HTTPError as e:
-                print(f"[Hand 2s] HTTP handd error {e.code}: {e.reason}")
+                self.get_logger().warn(f"[Hand 2s] HTTP handd error {e.code}: {e.reason}")
             except urllib.error.URLError as e:
-                print(f"[Hand 2s] HTTP handd URL error: {e.reason}")
+                self.get_logger().warn(f"[Hand 2s] HTTP handd URL error: {e.reason}")
             except Exception as e:
-                print(f"[Hand 2s] HTTP handd failed: {e}")
-            print(f"[Hand 2s] Detected hand in vision field for {elapsed:.1f}s")
-            print(f"[Hand 2s] Current position: X={pos['X']:.3f} Y={pos['Y']:.3f} Z={pos['Z']:.3f} m")
-            print(f"[Hand 2s] Recent detections ({len(self._recent_hands)}):")
+                self.get_logger().warn(f"[Hand 2s] HTTP handd failed: {e}")
+            logger = self.get_logger()
+            logger.info(f"[Hand 2s] Detected hand in vision field for {elapsed:.1f}s")
+            logger.info(
+                f"[Hand 2s] Current position: X={pos['X']:.3f} Y={pos['Y']:.3f} Z={pos['Z']:.3f} m"
+            )
+            logger.info(f"[Hand 2s] Recent detections ({len(self._recent_hands)}):")
+            for i, h in enumerate(self._recent_hands, 1):
+                p = h['position']
+                logger.info(
+                    f"[Hand 2s]   #{i}: X={p['X']:.3f} Y={p['Y']:.3f} Z={p['Z']:.3f} m "
+                    f"(t={h['duration']:.2f}s)"
+                )
         
 
     def _reset_hand_duration_tracking(self):

@@ -1,34 +1,25 @@
 #!/bin/bash
-taskset -c 5 ros2 launch realsense2_camera rs_launch.py \
-  camera_name:=camera \
-  enable_depth:=true \
-  enable_color:=true \
+# Minimal RealSense bringup for hand detection (camera_handdet_http.py).
+#
+# Publishes:
+#   /camera/camera/color/image_raw
+#   /camera/camera/aligned_depth_to_color/image_raw
+#   /camera/camera/color/camera_info
+#
+# Extra args: ./startcamera.sh pointcloud.enable:=true output:=log
+
+set -euo pipefail
+
+CPU_CORE="${REALSENSE_CPU_CORE:-5}"
+
+exec taskset -c "${CPU_CORE}" ros2 launch realsense2_camera rs_launch.py \
   depth_module.depth_profile:=640,480,15 \
   rgb_camera.color_profile:=640,480,15 \
-  enable_infra1:=false \
-  enable_infra2:=false \
-  enable_fisheye1:=false \
-  enable_fisheye2:=false \
-  enable_confidence:=false \
-  enable_gyro:=false \
-  enable_accel:=false \
-  enable_pose:=false \
-  pointcloud.enable:=true \
-  enable_sync:=false \
   align_depth.enable:=true \
-  colorizer.enable:=false \
-  decimation_filter.enable:=false \
-  spatial_filter.enable:=true \
-  spatial_filter.smooth_alpha:=0.3 \
-  spatial_filter.smooth_delta:=15 \
-  temporal_filter.enable:=true \
-  temporal_filter.persistency:=3 \
-  hole_filling_filter.enable:=true \
-  enable_disparity_transform:=true \
-  disparity_transform.saturation:=true \
   depth_module.emitter_enabled:=0 \
+  spatial_filter.enable:=true \
+  temporal_filter.enable:=true \
+  hole_filling_filter.enable:=true \
+  pointcloud.enable:=false \
   publish_tf:=false \
-  enable_metadata:=false \
-  diagnostics_period:=0.0 \
-  tf_publish_rate:=0.0 \
-  output:=screen
+  "$@"

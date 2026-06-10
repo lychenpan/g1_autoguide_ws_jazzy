@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, fields
 from typing import Callable, FrozenSet
 
+from sendmsg import DEFAULT_START_MESSAGE, publish_mission_start
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
 
@@ -29,6 +30,13 @@ DEFAULT_DOMAIN = 0
 DEFAULT_COMBO = ("L1", "A", "B")
 DEFAULT_COMBO_HOLD_SECS = 2.0
 
+
+def on_combo_triggered(combo: FrozenSet[str], hold_secs: float) -> None:
+    """Called once when the configured 3-button combo is held long enough."""
+    combo_str = "+".join(sorted(combo))
+    print(f"\n*** COMBO TRIGGERED: {combo_str} held {hold_secs:.1f}s ***\n")
+    if {"R1", "L1", "Up"}.issubset(combo):
+        publish_mission_start(f"{DEFAULT_START_MESSAGE}:{combo_str}")
 
 @dataclass
 class StickState:
@@ -100,10 +108,8 @@ def parse_combo(text: str) -> frozenset[str]:
     return frozenset(names)
 
 
-def on_combo_triggered(combo: FrozenSet[str], hold_secs: float) -> None:
-    """Called once when the configured 3-button combo is held long enough."""
-    combo_str = "+".join(sorted(combo))
-    print(f"\n*** COMBO TRIGGERED: {combo_str} held {hold_secs:.1f}s ***\n")
+
+    
 
 
 class ComboHoldDetector:
