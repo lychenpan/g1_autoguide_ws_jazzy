@@ -50,8 +50,8 @@ controller_server:
 
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.2
-      yaw_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.4
+      yaw_goal_tolerance: 0.4
       stateful: True
 
     PathHandler:
@@ -64,7 +64,7 @@ controller_server:
       open_loop: true
 
       # 基础参数
-      motion_model: "DiffDrive"           # G1 使用差分驱动模型
+      motion_model: "Omni"           # G1 使用差分驱动模型
       time_steps: 56                      # 预测步数
       model_dt: 0.05                      # 时间步长 0.05 秒 → 预测总时长 2.8 秒
       batch_size: 2000                    # 采样轨迹数
@@ -234,7 +234,7 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.2
+        inflation_radius: 0.4
         cost_scaling_factor: 1.0
       always_send_full_costmap: true
 

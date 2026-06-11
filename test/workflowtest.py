@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
+"""Navigation test: yaw spin loop at each of three hardcoded waypoints.
+
+At each waypoint:
+  1. Loop 5 times: read current (ax, ay, yaw), navigate to (ax, ay, yaw + 100°)
+     using two-stage navigation (rotate / translate / rotate).
+  2. Navigate to the next waypoint (two-stage) and repeat.
+
+Set SHOWROOM_AUTO_START=1 to run immediately on launch.
+"""
+
 from __future__ import annotations
 
-import ast
-import json
 import math
 import os
 import sys
@@ -10,14 +18,14 @@ import threading
 import time
 from typing import NamedTuple
 
-_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools')
+_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools")
 if _TOOLS_DIR not in sys.path:
     sys.path.insert(0, os.path.normpath(_TOOLS_DIR))
 
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # noqa: E402
 
-ChannelFactoryInitialize(0, os.environ.get('UNITREE_NET_IFACE', 'eth0'))
-os.environ.setdefault('ROS_DOMAIN_ID', '1')
+ChannelFactoryInitialize(0, os.environ.get("UNITREE_NET_IFACE", "eth0"))
+os.environ.setdefault("ROS_DOMAIN_ID", "1")
 
 import rclpy
 from rclpy.node import Node
@@ -28,106 +36,29 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import String
-from showroom_control import next_page, play_video
-from tts_player import RemoteTTSPlayer
 
-_DATA_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
+MISSION_START_TOPIC = os.environ.get(
+    "SHOWROOM_MISSION_START_TOPIC", "/showroom_mission/start"
 )
-_POINTS_FILE = os.path.join(_DATA_DIR, 'points.txt')
-_SHOWROOM_FILE = os.path.join(_DATA_DIR, 'showroom_speak.json')
-MISSION_START_TOPIC = os.environ.get('SHOWROOM_MISSION_START_TOPIC', '/showroom_mission/start')
-EXPECTED_STOPS = 8
-EXPECTED_SLOT_COUNT = 5
-FIXED_SPEAK_STOPS = 3  # stops 1–3: fixedspeaktext; 4–8: PPT slots
 
-# Global test flag: True = each TTS line speaks only the first 15 characters.
-TEST = True
-if "SHOWROOM_TEST" in os.environ:
-    TEST = os.environ["SHOWROOM_TEST"].lower() in ("1", "true", "yes")
-TEST_TTS_MAX_CHARS = 15
-
-# True = 3-step nav (align path yaw, translate, final rotate); False = single goal to B.
 NAV_TWO_STAGE = True
 if "NAV_TWO_STAGE" in os.environ:
     NAV_TWO_STAGE = os.environ["NAV_TWO_STAGE"].lower() in ("1", "true", "yes")
 
+ODOM_TOPIC = "/unitree/odom"
+DEFAULT_NAV_ALIGN_THRESH_DEG = 50.0
+MIN_PATH_DIST_M = 0.05
+FINAL_YAW_SKIP_THRESH_DEG = 10
 
-def text_for_tts(text: str) -> str:
-    if TEST:
-        return text[:TEST_TTS_MAX_CHARS]
-    return text
+# Hardcoded test waypoints: (x, y, yaw) in map frame.
+TEST_POINTS: list[tuple[float, float, float]] = [
+    (-7.2, 15.1, -3.111007),
+    (-6.7, 18.5, -0.566922)
+]
 
-
-def load_goals(path: str) -> list[tuple[float, float, float]]:
-    goals = []
-    with open(path, 'r', encoding='utf-8') as f:
-        for line_no, line in enumerate(f, start=1):
-            code = line.split('#', 1)[0].strip().rstrip(',')
-            if not code:
-                continue
-            try:
-                point = ast.literal_eval(code)
-            except (SyntaxError, ValueError) as exc:
-                raise ValueError(f"Invalid point at {path}:{line_no}: {line!r}") from exc
-            if not isinstance(point, (tuple, list)) or len(point) != 3:
-                raise ValueError(f"Expected (x, y, yaw) at {path}:{line_no}: {line!r}")
-            goals.append((float(point[0]), float(point[1]), float(point[2])))
-    if not goals:
-        raise ValueError(f"No goals found in {path}")
-    return goals
-
-
-def slot_speak_texts(slot_row: dict) -> list[str]:
-    slide_count = int(slot_row["slideCount"])
-    speak_by_page = slot_row.get("speakByPage") or {}
-    return [str(speak_by_page.get(str(i), "")) for i in range(slide_count)]
-
-
-def load_voice_text_lists(path: str) -> list[list[str]]:
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    voice_lists: list[list[str]] = []
-
-    fixed = data.get("fixedspeaktext") or []
-    if not isinstance(fixed, list):
-        raise ValueError(f"{path}: fixedspeaktext must be a list")
-    for text in fixed:
-        voice_lists.append([str(text)])
-
-    slots = data.get("slots") or []
-    if not isinstance(slots, list):
-        raise ValueError(f"{path}: slots must be a list")
-    slots_sorted = sorted(slots, key=lambda row: int(row["slot"]))
-    if len(slots_sorted) != EXPECTED_SLOT_COUNT:
-        raise ValueError(
-            f"{path}: expected {EXPECTED_SLOT_COUNT} slots, got {len(slots_sorted)}"
-        )
-
-    for slot_row in slots_sorted:
-        voice_lists.append(slot_speak_texts(slot_row))
-
-    if len(voice_lists) != EXPECTED_STOPS:
-        raise ValueError(
-            f"{path}: expected {EXPECTED_STOPS} voice lists "
-            f"({len(fixed)} fixed + {EXPECTED_SLOT_COUNT} slots), got {len(voice_lists)}"
-        )
-    return voice_lists
-
-
-def build_mission_steps(
-    points_path: str = _POINTS_FILE,
-    showroom_path: str = _SHOWROOM_FILE,
-) -> list[tuple[tuple[float, float, float], list[str]]]:
-    points = load_goals(points_path)
-    voice_lists = load_voice_text_lists(showroom_path)
-    if len(points) != len(voice_lists):
-        raise ValueError(
-            f"points ({len(points)} in {points_path}) != "
-            f"voice stops ({len(voice_lists)} in {showroom_path})"
-        )
-    return list(zip(points, voice_lists))
+YAW_INCREMENT_DEG = float(os.environ.get("WORKFLOW_TEST_YAW_INCREMENT_DEG", "100"))
+LOOP_COUNT = int(os.environ.get("WORKFLOW_TEST_LOOP_COUNT", "5"))
+NAV_TIMEOUT_SEC = float(os.environ.get("WORKFLOW_TEST_NAV_TIMEOUT_SEC", "300"))
 
 
 def nav_status_to_text(status: int) -> str:
@@ -166,14 +97,12 @@ def angle_diff_deg(a: float, b: float) -> float:
 
 
 def path_yaw_from_points(ax: float, ay: float, bx: float, by: float) -> float:
-    """Yaw of line A->B in map frame (same frame as goals and /unitree/odom)."""
     return math.atan2(by - ay, bx - ax)
 
 
-ODOM_TOPIC = "/unitree/odom"
-DEFAULT_NAV_ALIGN_THRESH_DEG = 50.0
-MIN_PATH_DIST_M = 0.05
-FINAL_YAW_SKIP_THRESH_DEG = 10
+def yaw_deg360(yaw_rad: float) -> float:
+    """Convert yaw radians to [0, 360) degrees for logging."""
+    return (math.degrees(yaw_rad) + 360.0) % 360.0
 
 
 class RobotPose(NamedTuple):
@@ -183,17 +112,11 @@ class RobotPose(NamedTuple):
     stamp: Time
 
 
-class ShowroomWorkflowNode(Node):
-    """ROS 2 node: wait for start topic, then run 8 navigate + TTS steps."""
+class WorkflowTestNode(Node):
+    """Run yaw-in-place loops at three waypoints using two-stage nav."""
 
-    def __init__(
-        self,
-        mission_steps: list[tuple[tuple[float, float, float], list[str]]],
-        tts: RemoteTTSPlayer,
-    ):
-        super().__init__("showroom_workflow")
-        self._mission_steps = mission_steps
-        self._tts = tts
+    def __init__(self):
+        super().__init__("workflow_test")
         self._running = False
         self._pending_start = False
         self._start_message = ""
@@ -206,10 +129,16 @@ class ShowroomWorkflowNode(Node):
         self.create_subscription(String, MISSION_START_TOPIC, self._on_start_request, 10)
         self.create_timer(0.2, self._mission_timer_cb)
         self.get_logger().info(
-            f"Loaded {len(mission_steps)} stops from {_SHOWROOM_FILE} + {_POINTS_FILE}"
+            f"Workflow test loaded: {len(TEST_POINTS)} waypoints, "
+            f"{LOOP_COUNT} yaw loops per stop, "
+            f"yaw increment={YAW_INCREMENT_DEG}°"
         )
         self.get_logger().info(
-            f"Publish std_msgs/String to {MISSION_START_TOPIC} to begin mission"
+            f"NAV_TWO_STAGE={'on' if NAV_TWO_STAGE else 'off'} "
+            f"({'3-step path-yaw nav' if NAV_TWO_STAGE else 'direct goal'})"
+        )
+        self.get_logger().info(
+            f"Publish std_msgs/String to {MISSION_START_TOPIC} to begin test"
         )
 
     def _on_odom(self, msg: Odometry) -> None:
@@ -236,9 +165,7 @@ class ShowroomWorkflowNode(Node):
             f"age={age_sec:.3f}s"
         )
 
-    def _get_robot_pose(
-        self, timeout_sec: float = 5.0
-    ) -> RobotPose | None:
+    def _get_robot_pose(self, timeout_sec: float = 5.0) -> RobotPose | None:
         if self._latest_pose is not None:
             return self._latest_pose
         deadline = time.monotonic() + timeout_sec
@@ -250,12 +177,10 @@ class ShowroomWorkflowNode(Node):
 
     def _on_start_request(self, msg: String) -> None:
         if self._running:
-            self.get_logger().warn("Mission already running, ignoring start request")
+            self.get_logger().warn("Test already running, ignoring start request")
             return
         self._start_message = msg.data.strip()
-        self.get_logger().info(
-            f"Start request received: {self._start_message!r}"
-        )
+        self.get_logger().info(f"Start request received: {self._start_message!r}")
         self._pending_start = True
 
     def _mission_timer_cb(self) -> None:
@@ -265,7 +190,7 @@ class ShowroomWorkflowNode(Node):
         self._running = True
         self._mission_thread = threading.Thread(
             target=self._run_mission_wrapper,
-            name="showroom-mission-thread",
+            name="workflow-test-thread",
             daemon=True,
         )
         self._mission_thread.start()
@@ -274,7 +199,7 @@ class ShowroomWorkflowNode(Node):
         try:
             self._run_mission()
         except Exception as exc:
-            self.get_logger().exception(f"Mission crashed: {exc}")
+            self.get_logger().exception(f"Test crashed: {exc}")
         finally:
             self._running = False
 
@@ -304,7 +229,8 @@ class ShowroomWorkflowNode(Node):
 
         prefix = f"{label} " if label else ""
         self.get_logger().info(
-            f"Step[NAV]: {prefix}sending goal x={x:.5f}, y={y:.5f}, yaw={yaw:.5f}"
+            f"Step[NAV]: {prefix}sending goal x={x:.5f}, y={y:.5f}, "
+            f"yaw={yaw_deg360(yaw):.1f}°"
         )
         send_future = self._nav_client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, send_future, timeout_sec=timeout_sec)
@@ -366,9 +292,9 @@ class ShowroomWorkflowNode(Node):
             )
 
         self.get_logger().info(
-            f"Step[NAV]: A=({ax:.5f}, {ay:.5f}, yaw={robot_yaw:.5f}), "
-            f"B=({x:.5f}, {y:.5f}, yaw={target_yaw:.5f}), "
-            f"path_yaw={line_yaw:.5f}, dist={dist:.3f} m, "
+            f"Step[NAV]: A=({ax:.5f}, {ay:.5f}, yaw={yaw_deg360(robot_yaw):.1f}°), "
+            f"B=({x:.5f}, {y:.5f}, yaw={yaw_deg360(target_yaw):.1f}°), "
+            f"path_yaw={yaw_deg360(line_yaw):.1f}°, dist={dist:.3f} m, "
             f"{self._pose_time_log_suffix(pose.stamp)}"
         )
 
@@ -391,7 +317,7 @@ class ShowroomWorkflowNode(Node):
 
         if dist >= MIN_PATH_DIST_M:
             self.get_logger().info(
-                f"Step[NAV]: (2/3) move to B with path yaw={line_yaw:.5f}"
+                f"Step[NAV]: (2/3) move to B with path yaw={yaw_deg360(line_yaw):.1f}°"
             )
             out = self._send_nav_goal_blocking(
                 x, y, line_yaw, timeout_sec, label="(2/3 translate)"
@@ -404,12 +330,9 @@ class ShowroomWorkflowNode(Node):
         time.sleep(3.0)
 
         final_delta = angle_diff_deg(line_yaw, target_yaw)
-        ## 
-        
-        
         if final_delta > FINAL_YAW_SKIP_THRESH_DEG:
             self.get_logger().info(
-                f"Step[NAV]: (3/3) final rotation to target yaw={target_yaw:.5f} "
+                f"Step[NAV]: (3/3) final rotation to target yaw={yaw_deg360(target_yaw):.1f}° "
                 f"(delta={final_delta:.1f}°)"
             )
             pose = self._get_robot_pose()
@@ -420,8 +343,8 @@ class ShowroomWorkflowNode(Node):
                 return None
             ax, ay, robot_yaw = pose.x, pose.y, pose.yaw
             self.get_logger().info(
-                f"Step[NAV]: (3/3) pose A=({ax:.5f}, {ay:.5f}, yaw={robot_yaw:.5f}), "
-                f"target_yaw={target_yaw:.5f}, "
+                f"Step[NAV]: (3/3) pose A=({ax:.5f}, {ay:.5f}, yaw={yaw_deg360(robot_yaw):.1f}°), "
+                f"target_yaw={yaw_deg360(target_yaw):.1f}°, "
                 f"{self._pose_time_log_suffix(pose.stamp)}"
             )
             out = self._send_nav_goal_blocking(
@@ -435,115 +358,98 @@ class ShowroomWorkflowNode(Node):
         )
         return GoalStatus.STATUS_SUCCEEDED, None
 
-    def _advance_ppt_slide(self, stop_idx: int, part_idx: int) -> None:
-        n = stop_idx - FIXED_SPEAK_STOPS
+    def _run_yaw_loop(self, stop_idx: int) -> bool:
+        """Loop LOOP_COUNT times: stay at (ax, ay), rotate yaw by +YAW_INCREMENT_DEG."""
         self.get_logger().info(
-            f"Step[PPT]: next_page after stop {stop_idx} part {part_idx}, n={n}"
+            f"--- Stop {stop_idx}: begin {LOOP_COUNT}x yaw loop (+{YAW_INCREMENT_DEG}°) ---"
         )
-        ## TODO, for kinds of remote control or call, if some exceptions occurs, let the 
-        ## robot to speak out the error message.
-        try:
-            result = next_page(n=n)
-        except Exception as exc:
-            self.get_logger().warn(f"Step[PPT]: next_page failed: {exc}")
-            return
-        if result.ok:
-            self.get_logger().info(f"Step[PPT]: next_page OK (HTTP {result.status_code})")
-        else:
-            self.get_logger().warn(
-                f"Step[PPT]: next_page HTTP {result.status_code}: {result.body[:200]}"
+        for iteration in range(1, LOOP_COUNT + 1):
+            pose = self._get_robot_pose()
+            if pose is None:
+                self.get_logger().error(
+                    f"Stop {stop_idx} loop {iteration}/{LOOP_COUNT}: no pose, abort"
+                )
+                return False
+
+            ax, ay, yaw = pose.x, pose.y, pose.yaw
+            target_yaw = normalize_angle(yaw + math.radians(YAW_INCREMENT_DEG))
+            self.get_logger().info(
+                f"Stop {stop_idx} loop {iteration}/{LOOP_COUNT}: "
+                f"A=({ax:.5f}, {ay:.5f}, yaw={yaw_deg360(yaw):.1f}°) -> "
+                f"target yaw={yaw_deg360(target_yaw):.1f}°"
             )
 
-    def _play_voice_list(self, stop_idx: int, texts: list[str]) -> None:
-        is_ppt_slot = stop_idx > FIXED_SPEAK_STOPS
-        for part_idx, text in enumerate(texts, start=1):
-            text = text.strip()
-            if not text:
+            out = self.navigate_blocking(ax, ay, target_yaw, timeout_sec=NAV_TIMEOUT_SEC)
+            if out is None or out[0] != GoalStatus.STATUS_SUCCEEDED:
+                status_text = (
+                    "None" if out is None else f"{out[0]}({nav_status_to_text(out[0])})"
+                )
                 self.get_logger().warn(
-                    f"Step[TTS]: stop {stop_idx} part {part_idx}/{len(texts)} empty, sleep 2s"
+                    f"Stop {stop_idx} loop {iteration}/{LOOP_COUNT} failed ({status_text})"
                 )
-                time.sleep(2.0)
-            else:
-                speak_text = text_for_tts(text)
-                self.get_logger().info(
-                    f"Step[TTS]: stop {stop_idx} part {part_idx}/{len(texts)}, "
-                    f"chars={len(text)}"
-                    + (
-                        f", TEST mode speak first {len(speak_text)} chars: {speak_text!r}"
-                        if TEST
-                        else ""
-                    )
-                )
-                self._tts.playtext(speak_text)
-                self._tts.wait_done()
-            if is_ppt_slot:
-                self._advance_ppt_slide(stop_idx, part_idx)
+                return False
+
+            self.get_logger().info(
+                f"Stop {stop_idx} loop {iteration}/{LOOP_COUNT}: succeeded"
+            )
+            time.sleep(2.0)
+
+        self.get_logger().info(f"--- Stop {stop_idx}: yaw loop complete ---")
+        return True
+
+    def _navigate_to_point(
+        self, stop_idx: int, x: float, y: float, yaw: float
+    ) -> bool:
+        self.get_logger().info(
+            f"Stop {stop_idx}: navigate to ({x:.5f}, {y:.5f}, yaw={yaw_deg360(yaw):.1f}°)"
+        )
+        out = self.navigate_blocking(x, y, yaw, timeout_sec=NAV_TIMEOUT_SEC)
+        if out is None or out[0] != GoalStatus.STATUS_SUCCEEDED:
+            status_text = (
+                "None" if out is None else f"{out[0]}({nav_status_to_text(out[0])})"
+            )
+            self.get_logger().warn(f"Stop {stop_idx} navigation failed ({status_text})")
+            return False
+        self.get_logger().info(f"Stop {stop_idx}: navigation succeeded")
+        return True
 
     def _run_mission(self) -> None:
-        total = len(self._mission_steps)
-        self.get_logger().info(f"=== Showroom mission started ({total} stops) ===")
+        total = len(TEST_POINTS)
+        self.get_logger().info(f"=== Workflow test started ({total} waypoints) ===")
         if self._start_message:
             self.get_logger().info(f"Start message: {self._start_message!r}")
-        if TEST:
-            self.get_logger().info(
-                f"TEST mode: TTS limited to first {TEST_TTS_MAX_CHARS} characters per line"
-            )
-        self.get_logger().info(
-            f"NAV_TWO_STAGE={'on' if NAV_TWO_STAGE else 'off'} "
-            f"({'3-step path-yaw nav' if NAV_TWO_STAGE else 'direct goal to B'})"
-        )
 
-        for stop_idx, ((x, y, yaw), voice_texts) in enumerate(self._mission_steps, start=1):
-            self.get_logger().info(f"--- Stop {stop_idx}/{total} begin ---")
-            self.get_logger().info(
-                f"Step[NAV]: navigate to ({x:.5f}, {y:.5f}, {yaw:.5f}), "
-                f"TTS parts={len(voice_texts)}"
-            )
+        for stop_idx, (x, y, yaw) in enumerate(TEST_POINTS, start=1):
+            self.get_logger().info(f"=== Waypoint {stop_idx}/{total} ===")
 
-            out = self.navigate_blocking(x, y, yaw, timeout_sec=300.0)
-            if out is None or out[0] != GoalStatus.STATUS_SUCCEEDED:
-                status_text = "None" if out is None else f"{out[0]}({nav_status_to_text(out[0])})"
-                self.get_logger().warn(
-                    f"Step[NAV]: stop {stop_idx} failed ({status_text}), skip TTS"
+            if not self._navigate_to_point(stop_idx, x, y, yaw):
+                self.get_logger().error(f"Failed to reach waypoint {stop_idx}, aborting")
+                break
+
+            if not self._run_yaw_loop(stop_idx):
+                self.get_logger().error(
+                    f"Yaw loop failed at waypoint {stop_idx}, aborting"
                 )
-                continue
+                break
 
-            self.get_logger().info(f"Step[NAV]: stop {stop_idx} succeeded")
-            # time.sleep(1.0)
-            self._play_voice_list(stop_idx, voice_texts)
-            self.get_logger().info(f"--- Stop {stop_idx}/{total} end ---")
+            time.sleep(1.0)
 
-            ## for the first point, play video and pause untile the video is over.
-            if stop_idx == 1:
-                play_video()
-                if TEST:
-                    time.sleep(10)
-                    play_video(command="PauseVideo")
-                else:
-                    time.sleep(5*60+30+3)  # 5:30 seconds
-            else:
-                time.sleep(1.0)
-
-        self.get_logger().info("=== Showroom mission complete ===")
+        self.get_logger().info("=== Workflow test complete ===")
 
 
-def main():
-    tts = RemoteTTSPlayer()
+def main() -> None:
     rclpy.init()
     node = None
     try:
-        mission_steps = build_mission_steps()
-        node = ShowroomWorkflowNode(mission_steps, tts)
+        node = WorkflowTestNode()
 
-        if os.environ.get("SHOWROOM_AUTO_START", "").lower() in ("1", "true", "yes"):
-            node.get_logger().info("SHOWROOM_AUTO_START set, starting mission immediately")
-            node._pending_start = True
+        
+        node._pending_start = True
 
         rclpy.spin(node)
     finally:
         if node is not None:
             node.destroy_node()
-        tts.stop()
         rclpy.shutdown()
 
 

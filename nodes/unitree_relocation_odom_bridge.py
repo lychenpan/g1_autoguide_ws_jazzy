@@ -60,10 +60,9 @@ class UnitreeRelocationOdomBridge(Node):
             )
             self._warned_frames = True
 
-        odom.header.stamp.sec = int(msg.header.stamp.sec)
-        odom.header.stamp.nanosec = int(msg.header.stamp.nanosec)
-        if odom.header.stamp.sec == 0 and odom.header.stamp.nanosec == 0:
-            odom.header.stamp = self.get_clock().now().to_msg()
+        # Unitree stamp uses a clock offset from Docker ROS time (observed ~118s).
+        # Re-stamp on receive so domain-1 nodes, TF, and Nav2 share one clock.
+        odom.header.stamp = self.get_clock().now().to_msg()
 
         odom.header.frame_id = parent_frame
         odom.child_frame_id = child_frame

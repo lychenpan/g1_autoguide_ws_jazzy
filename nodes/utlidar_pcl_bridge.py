@@ -56,14 +56,9 @@ class UtlidarPCLBridge(Node):
 
     def _dds_to_ros_pointcloud(self, msg: PointCloud2Dds) -> PointCloud2:
         out = PointCloud2()
-        # header stamp
-        try:
-            out.header.stamp.sec = int(msg.header.stamp.sec)
-            out.header.stamp.nanosec = int(msg.header.stamp.nanosec)
-        except Exception:
-            out.header.stamp = self.get_clock().now().to_msg()
-        if out.header.stamp.sec == 0 and out.header.stamp.nanosec == 0:
-            out.header.stamp = self.get_clock().now().to_msg()
+        # Match unitree_relocation_odom_bridge: use domain-1 ROS clock so TF and
+        # costmap message filters share the same timeline as /unitree/odom.
+        out.header.stamp = self.get_clock().now().to_msg()
 
         # frame
         out.header.frame_id = getattr(msg.header, 'frame_id', DEFAULT_FRAME) or DEFAULT_FRAME

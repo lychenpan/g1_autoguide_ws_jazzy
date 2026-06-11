@@ -1,7 +1,7 @@
 [Unit]
 Description=G1 TTS web server, SLAM relocation, and wireless controller at boot
 Documentation=file:///home/unitree/workspace/dockerws/g1_ws_jazzy/tools/systemd/g1-tools-start.sh
-After=network-online.target
+After=network-online.target multi-user.target
 Wants=network-online.target
 
 [Service]

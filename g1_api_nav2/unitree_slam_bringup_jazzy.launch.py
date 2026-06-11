@@ -130,7 +130,7 @@ def generate_launch_description():
                 parameters=[
                     {
                         "print_cmd_vel_log": True,
-                        "enable_min_yaw_clamp": False,
+                        "enable_min_yaw_clamp": True,
                     }
                 ],
             ),
