@@ -1,19 +1,30 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <CycloneDDS xmlns="https://cdds.io/config">
-    <Domain Id="any">
+
+    <Domain Id="0">
         <General>
-            <!-- <MaxMessageSize>66665500B</MaxMessageSize> -->
             <AllowMulticast>spdp</AllowMulticast>
             <Interfaces>
                 <NetworkInterface name="eth0" priority="default" multicast="default" />
             </Interfaces>
         </General>
-
-        
-        <!-- UDP 缓冲区设置（可选，如果遇到 ENOBUFS 错误） -->
         <Internal>
             <SocketSendBufferSize min="2 MiB" max="8 MiB" />
             <SocketReceiveBufferSize min="2 MiB" max="8 MiB" />
         </Internal>
     </Domain>
+
+    <Domain Id="1">
+        <General>
+            <AllowMulticast>spdp</AllowMulticast>
+            <Interfaces>
+                <NetworkInterface name="wlan0" priority="default" multicast="default" />
+            </Interfaces>
+        </General>
+        <Internal>
+            <SocketSendBufferSize min="2 MiB" max="8 MiB" />
+            <SocketReceiveBufferSize min="2 MiB" max="8 MiB" />
+        </Internal>
+    </Domain>
+
 </CycloneDDS>

@@ -5,12 +5,30 @@ set -euo pipefail
 
 TOOLS_DIR="/home/unitree/workspace/dockerws/g1_ws_jazzy/tools"
 NODES_DIR="/home/unitree/workspace/dockerws/g1_ws_jazzy/nodes"
-PYTHON=/usr/bin/python3
+PYTHON=(/usr/bin/python3 -u)
 TTS_HOST="0.0.0.0"
 TTS_PORT="10011"
 TTS_INTERFACE="eth0"
 BOOT_DELAY_SEC="${G1_BOOT_DELAY_SEC:-10}"
 HEALTH_URL="http://localhost:${TTS_PORT}/health"
+ROS_SETUP="${ROS_SETUP:-/opt/ros/foxy/setup.bash}"
+CYCLONEDDS_SETUP="${CYCLONEDDS_SETUP:-/home/unitree/cyclonedds_ws/install/setup.bash}"
+
+source_ros_env() {
+  if [[ ! -f "$ROS_SETUP" ]]; then
+    echo "ROS setup not found: $ROS_SETUP" >&2
+    return 1
+  fi
+  # ROS setup scripts reference unset vars; relax nounset while sourcing.
+  set +u
+  # shellcheck disable=SC1090
+  source "$ROS_SETUP"
+  if [[ -f "$CYCLONEDDS_SETUP" ]]; then
+    # shellcheck disable=SC1090
+    source "$CYCLONEDDS_SETUP"
+  fi
+  set -u
+}
 
 cd "$TOOLS_DIR"
 
@@ -20,7 +38,7 @@ fi
 
 CONTROLLER_PID=""
 
-"$PYTHON" "$TOOLS_DIR/tts_web_server.py" \
+"${PYTHON[@]}" "$TOOLS_DIR/tts_web_server.py" \
   --host "$TTS_HOST" --port "$TTS_PORT" --interface "$TTS_INTERFACE" &
 TTS_PID=$!
 
@@ -48,18 +66,34 @@ if ! curl -sf "$HEALTH_URL" >/dev/null; then
   exit 1
 fi
 
-if ! "$PYTHON" "$TOOLS_DIR/g1_slam_relocation.py"; then
+if ! "${PYTHON[@]}" "$TOOLS_DIR/g1_slam_relocation.py"; then
   echo "WARNING: SLAM relocation failed; TTS server will keep running" >&2
 fi
 
-export PYTHONPATH="${PYTHONPATH:-/home/unitree/workspace/unitree_sdk2_python}:${NODES_DIR}"
-"$PYTHON" "$NODES_DIR/unitree_controller_node.py" &
-CONTROLLER_PID=$!
-
-if ! kill -0 "$CONTROLLER_PID" 2>/dev/null; then
-  echo "Wireless controller node failed to start" >&2
+if ! source_ros_env; then
+  echo "Wireless controller node requires ROS; setup failed" >&2
   exit 1
 fi
+
+export PYTHONPATH="/home/unitree/workspace/unitree_sdk2_python:${PYTHONPATH}:${NODES_DIR}"
+
+if ! "${PYTHON[@]}" -c "import rclpy; from std_msgs.msg import String"; then
+  echo "Wireless controller node requires rclpy; import check failed" >&2
+  exit 1
+fi
+
+"${PYTHON[@]}" "$NODES_DIR/unitree_controller_node.py" &
+CONTROLLER_PID=$!
+
+for _ in $(seq 1 20); do
+  if ! kill -0 "$CONTROLLER_PID" 2>/dev/null; then
+    status=0
+    wait "$CONTROLLER_PID" 2>/dev/null || status=$?
+    echo "Wireless controller node exited during startup (exit=${status})" >&2
+    exit 1
+  fi
+  sleep 0.25
+done
 
 echo "Wireless controller node started (pid=${CONTROLLER_PID})"
 

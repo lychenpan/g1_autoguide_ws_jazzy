@@ -13,8 +13,9 @@ EnvironmentFile=/home/unitree/workspace/dockerws/g1_ws_jazzy/tools/systemd/g1-to
 ExecStart=/home/unitree/workspace/dockerws/g1_ws_jazzy/tools/systemd/g1-tools-start.sh
 Restart=on-failure
 RestartSec=5
+# Merge stdout and stderr so shell + all Python children land in one file.
 StandardOutput=append:/home/unitree/workspace/dockerws/g1_ws_jazzy/logs/g1-tools.log
-StandardError=append:/home/unitree/workspace/dockerws/g1_ws_jazzy/logs/g1-tools.err.log
+StandardError=append:/home/unitree/workspace/dockerws/g1_ws_jazzy/logs/g1-tools.log
 
 [Install]
 WantedBy=multi-user.target

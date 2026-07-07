@@ -42,7 +42,7 @@ EXPECTED_SLOT_COUNT = 5
 FIXED_SPEAK_STOPS = 3  # stops 1–3: fixedspeaktext; 4–8: PPT slots
 
 # Global test flag: True = each TTS line speaks only the first 15 characters.
-TEST = True
+TEST = False
 if "SHOWROOM_TEST" in os.environ:
     TEST = os.environ["SHOWROOM_TEST"].lower() in ("1", "true", "yes")
 TEST_TTS_MAX_CHARS = 15
@@ -401,7 +401,7 @@ class ShowroomWorkflowNode(Node):
         else:
             self.get_logger().info("Step[NAV]: (2/3) skip translation (already at B)")
 
-        time.sleep(3.0)
+        # time.sleep(3.0)
 
         final_delta = angle_diff_deg(line_yaw, target_yaw)
         ## 
@@ -521,6 +521,7 @@ class ShowroomWorkflowNode(Node):
                     play_video(command="PauseVideo")
                 else:
                     time.sleep(5*60+30+3)  # 5:30 seconds
+                    play_video(command="PauseVideo")
             else:
                 time.sleep(1.0)
 

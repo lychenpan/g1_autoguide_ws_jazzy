@@ -441,9 +441,7 @@ def main() -> None:
     rclpy.init()
     node = None
     try:
-        node = WorkflowTestNode()
-
-        
+        node = WorkflowTestNode()  
         node._pending_start = True
 
         rclpy.spin(node)

@@ -12,6 +12,7 @@ Usage (inside cp1-jazzy / cp2-jazzy):
 from __future__ import annotations
 
 import signal
+import logging
 import sys
 import threading
 import time
@@ -32,27 +33,38 @@ VERBOSE = False
 BUTTON_COUNT = 3
 HOLD_SECS = 1.0
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
 def send_voice_state(state: str) -> None:
     """Send state data to voice."""
     import requests
 
     BASE = "http://localhost:10011"
-    print(str)
+    logger.info("send voice state: %s", state)
     r = requests.post(
         f"{BASE}/api/speak",
         json={"text": state, "wait": True},
         timeout=60)
     r.raise_for_status()
-    print(r.json())
+    logger.info("voice response: %s", r.json())
 
 def on_combo_triggered(combo: FrozenSet[str], hold_secs: float) -> None:
     """Called once when any 3-button combo is held long enough."""
     combo_str = "   ".join(sorted(combo))
-    print(f"\n*** COMBO TRIGGERED: {combo_str} held {hold_secs:.1f}s ***\n")
+    logger.info("COMBO TRIGGERED: %s held %.1fs", combo_str, hold_secs)
     send_voice_state(f"Combo triggered: {combo_str} ")
-    print("sendvoicestate")
+    logger.info("sendvoicestate")
+    ### logic here TODO
     if {"R1", "L1", "Up"}.issubset(combo):
         publish_mission_start(f"------------{DEFAULT_START_MESSAGE}:{combo_str}")
+
+    if {"R1", "L1", "Down"}.issubset(combo):
+        pass
 
 
 @dataclass
@@ -207,17 +219,20 @@ class WirelessReader:
         )
 
     def start(self) -> None:
-        print(
-            f"Initializing DDS domain={DOMAIN} iface={IFACE!r} "
-            f"topic={DDS_TOPIC}"
+        logger.info(
+            "Initializing DDS domain=%s iface=%r topic=%s",
+            DOMAIN,
+            IFACE,
+            DDS_TOPIC,
         )
         ChannelFactoryInitialize(DOMAIN, IFACE)
         self.sub = ChannelSubscriber(DDS_TOPIC, WirelessController_)
         self.sub.Init(self._on_message, QUEUE_LEN)
-        print("Listening (Ctrl+C to stop)...")
-        print(
-            f"Combo watch: hold any {self.combo_detector.button_count} buttons "
-            f"together for {self.combo_detector.hold_secs:.1f}s to trigger"
+        logger.info("Listening (Ctrl+C to stop)...")
+        logger.info(
+            "Combo watch: hold any %s buttons together for %.1fs to trigger",
+            self.combo_detector.button_count,
+            self.combo_detector.hold_secs,
         )
 
     def _on_message(self, msg: WirelessController_) -> None:
@@ -230,11 +245,12 @@ class WirelessReader:
             if self.last is not None and self._same(self.last, snap):
                 return
 
-        if self.seq % PRINT_EVERY == 0 or PRINT_EVERY == 1:
-            if VERBOSE:
-                print(snap.format_detail(self.seq))
-            else:
-                print(snap.format_line(self.seq))
+        # if self.seq % PRINT_EVERY == 0 or PRINT_EVERY == 1:
+        
+        #     if VERBOSE:
+        #         logger.info("%s", snap.format_detail(self.seq))
+        #     else:
+        #         logger.info("%s", snap.format_line(self.seq))
 
         self.last = snap
 
@@ -260,14 +276,14 @@ class WirelessReader:
         finally:
             if self.sub is not None:
                 self.sub.Close()
-            print(f"\nStopped after {self.seq} messages.")
+            logger.info("Stopped after %s messages.", self.seq)
 
 
 def main() -> int:
     try:
         WirelessReader().run()
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        logger.exception("Error: %s", e)
         return 1
     return 0
 

@@ -6,6 +6,7 @@ Based on ttstest.py / asr_voice_controller.py patterns.
 """
 
 import argparse
+import logging
 import sys
 import threading
 import time
@@ -17,6 +18,13 @@ from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
 CHARS_PER_SEC = 4.5
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 audio_client = None
@@ -40,6 +48,7 @@ def speak_text(text: str) -> None:
 
 @app.route("/health", methods=["GET"])
 def health():
+    logger.info("tts web health check visit")
     return jsonify({"status": "ok"})
 
 
@@ -61,6 +70,7 @@ def speak():
         return jsonify({"status": "spoken", "text": text, "estimated_duration_sec": estimated})
 
     threading.Thread(target=speak_text, args=(text,), daemon=True).start()
+    logger.info("speak text in tts web server:--- %s,",text)
     return jsonify({"status": "queued", "text": text, "estimated_duration_sec": estimated})
 
 
@@ -73,8 +83,8 @@ def main():
     args = parser.parse_args()
 
     init_audio_client(args.interface, args.volume)
-    print(f"TTS server listening on http://{args.host}:{args.port}")
-    print("POST /api/speak  JSON body: {\"text\": \"hello\"}")
+    logger.info("TTS server listening on http://%s:%s", args.host, args.port)
+    logger.info('POST /api/speak  JSON body: {"text": "hello"}')
     app.run(host=args.host, port=args.port, threaded=True)
 
 
