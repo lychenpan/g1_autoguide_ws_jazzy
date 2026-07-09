@@ -40,6 +40,13 @@ TIMEOUT_SEC = 10.0
 ODOM_TOPIC = "/unitree/slam_relocation/odom"
 ROS_DOMAIN_ID = "0"
 ROS_SETUP = os.environ.get("ROS_SETUP", "/opt/ros/foxy/setup.bash")
+CYCLONEDDS_SETUP = os.environ.get(
+    "CYCLONEDDS_SETUP", "/home/unitree/cyclonedds_ws/install/setup.bash"
+)
+CYCLONEDDS_URI = os.environ.get(
+    "CYCLONEDDS_URI", "/home/unitree/cyclonedds_ws/cyclonedds.xml"
+)
+RMW_IMPLEMENTATION = os.environ.get("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")
 ODOM_CHECK_SETTLE_SEC = 2.0
 ODOM_RATE_SAMPLE_SEC = 5.0
 MIN_ODOM_RATE_HZ = 1.0
@@ -173,6 +180,19 @@ def _min_odom_messages(sample_sec: float, min_rate_hz: float) -> int:
     return max(3, int(min_rate_hz * sample_sec * 0.7))
 
 
+def _ros_shell_prefix() -> str:
+    """Build bash prefix with ROS + Cyclone DDS env (systemd does not load ~/.bashrc)."""
+    parts = [f'source "{ROS_SETUP}"']
+    if Path(CYCLONEDDS_SETUP).is_file():
+        parts.append(f'source "{CYCLONEDDS_SETUP}"')
+    parts.extend([
+        f'export RMW_IMPLEMENTATION={RMW_IMPLEMENTATION}',
+        f'export CYCLONEDDS_URI={CYCLONEDDS_URI}',
+        f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID}",
+    ])
+    return " && ".join(parts) + " && "
+
+
 def verify_relocation_odom(
     topic: str = ODOM_TOPIC,
     sample_sec: float = ODOM_RATE_SAMPLE_SEC,
@@ -190,8 +210,7 @@ def verify_relocation_odom(
 
     min_messages = _min_odom_messages(sample_sec, min_rate_hz)
     cmd = (
-        f'source "{ROS_SETUP}" && '
-        f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID} && "
+        f"{_ros_shell_prefix()}"
         f"timeout {sample_sec:.1f} ros2 topic echo {topic}"
     )
     print(
