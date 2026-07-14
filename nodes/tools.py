@@ -38,6 +38,11 @@ NAV2_RESTART_SPEAK_TEXT = "Restarting navigation stack"
 NAV2_READY_SPEAK_TEXT = "Nav2 stack ready"
 NAV2_FAIL_SPEAK_TEXT = "Nav2 stack failed to start"
 
+WIFI_CANDIDATES = ("展厅专用", "BIFNC Guest")
+NMCLI_BIN = "nmcli"
+# connection up needs root; uses passwordless sudo (see tools/sudoers-g1-wifi-nmcli)
+NMCLI_SUDO = ("sudo", "-n", "/usr/bin/nmcli")
+
 
 class MissionStartPublisher:
     """Lazy ROS 2 publisher; safe to call from non-ROS callback threads."""
@@ -292,3 +297,164 @@ def start_nav2_restart_async() -> threading.Thread:
     )
     thread.start()
     return thread
+
+
+def _nmcli(*args: str, timeout: float = 60) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [NMCLI_BIN, *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+
+
+def scan_wifi_signals(
+    ssids: tuple[str, ...] = WIFI_CANDIDATES,
+    rescan: bool = True,
+) -> dict[str, int]:
+    """Return best SIGNAL (0-100) for each requested SSID from nmcli scan."""
+    rescan_arg = "yes" if rescan else "no"
+    result = _nmcli("-t", "-f", "SSID,SIGNAL", "device", "wifi", "list", "--rescan", rescan_arg)
+    if result.returncode != 0:
+        logger.error("nmcli wifi list failed: %s", result.stderr.strip())
+        return {}
+
+    wanted = set(ssids)
+    best: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        if not line or ":" not in line:
+            continue
+        ssid, signal_str = line.rsplit(":", 1)
+        if ssid not in wanted:
+            continue
+        try:
+            signal = int(signal_str)
+        except ValueError:
+            continue
+        if signal > best.get(ssid, -1):
+            best[ssid] = signal
+
+    logger.info("WiFi scan signals: %s", best)
+    return best
+
+
+def pick_better_wifi(
+    signals: dict[str, int],
+    ssids: tuple[str, ...] = WIFI_CANDIDATES,
+) -> str | None:
+    """Pick SSID with the highest signal; None if none are visible."""
+    visible = [(ssid, signals[ssid]) for ssid in ssids if ssid in signals]
+    if not visible:
+        return None
+    visible.sort(key=lambda item: item[1], reverse=True)
+    return visible[0][0]
+
+
+def connect_wifi(ssid: str) -> bool:
+    """Bring up a saved NetworkManager connection by name (needs passwordless sudo)."""
+    logger.info("Connecting WiFi: %s", ssid)
+    try:
+        result = subprocess.run(
+            [*NMCLI_SUDO, "connection", "up", ssid],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=90,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("Timed out connecting WiFi: %s", ssid)
+        return False
+
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        logger.error("Failed to connect WiFi %s: %s", ssid, err)
+        if "password is required" in err.lower() or "a password is required" in err.lower():
+            logger.error(
+                "Passwordless sudo for nmcli is not configured. "
+                "Install tools/sudoers-g1-wifi-nmcli into /etc/sudoers.d/"
+            )
+        return False
+    logger.info("Connected WiFi: %s", ssid)
+    return True
+
+
+def active_wifi_connection() -> str | None:
+    """Return the active 802-11-wireless connection name, if any."""
+    result = _nmcli("-t", "-f", "NAME,TYPE", "connection", "show", "--active")
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        name, _, typ = line.partition(":")
+        if typ == "802-11-wireless":
+            return name
+    return None
+
+
+def switch_to_better_wifi(
+    ssids: tuple[str, ...] = WIFI_CANDIDATES,
+) -> str | None:
+    """Scan candidate SSIDs, connect to the stronger one, and announce via TTS.
+
+    Returns the chosen SSID on success, or None on failure.
+    """
+    signals = scan_wifi_signals(ssids=ssids, rescan=True)
+    best = pick_better_wifi(signals, ssids=ssids)
+    if best is None:
+        speak_tts("No candidate WiFi networks found")
+        logger.warning("No candidate WiFi networks found among %s", ssids)
+        return None
+
+    other = [s for s in ssids if s != best and s in signals]
+    if other:
+        speak_text = (
+            f"{best} has better signal, {signals[best]} percent, "
+            f"versus {other[0]} at {signals[other[0]]} percent"
+        )
+    else:
+        speak_text = f"{best} has better signal, {signals[best]} percent"
+    speak_tts(speak_text)
+
+    current = active_wifi_connection()
+    if current == best:
+        logger.info("Already connected to stronger WiFi: %s", best)
+        speak_tts(f"Already connected to {best}")
+        return best
+
+    if not connect_wifi(best):
+        speak_tts(f"Failed to connect to {best}")
+        return None
+
+    speak_tts(f"Connected to {best} successfully")
+    return best
+
+
+def handle_wifi_switch() -> None:
+    """Scan, switch to the stronger of the two showroom WiFi networks, speak result."""
+    chosen = switch_to_better_wifi()
+    if chosen:
+        logger.info("WiFi switch chose: %s", chosen)
+    else:
+        logger.warning("WiFi switch failed")
+
+
+def start_wifi_switch_async() -> threading.Thread:
+    """Run handle_wifi_switch in a background thread."""
+    thread = threading.Thread(
+        target=handle_wifi_switch,
+        name="wifi-switch",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+    ok = switch_to_better_wifi() is not None
+    raise SystemExit(0 if ok else 1)

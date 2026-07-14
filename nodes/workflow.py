@@ -36,21 +36,38 @@ _DATA_DIR = os.path.normpath(
 )
 _POINTS_FILE = os.path.join(_DATA_DIR, 'points.txt')
 _SHOWROOM_FILE = os.path.join(_DATA_DIR, 'showroom_speak.json')
+_CONFIG_FILE = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools', 'config.json')
+)
 MISSION_START_TOPIC = os.environ.get('SHOWROOM_MISSION_START_TOPIC', '/showroom_mission/start')
 EXPECTED_STOPS = 8
 EXPECTED_SLOT_COUNT = 5
 FIXED_SPEAK_STOPS = 3  # stops 1–3: fixedspeaktext; 4–8: PPT slots
 
 # Global test flag: True = each TTS line speaks only the first 15 characters.
+# Set at mission start from tools/config.json (showroom_test); SHOWROOM_TEST env overrides.
 TEST = False
-if "SHOWROOM_TEST" in os.environ:
-    TEST = os.environ["SHOWROOM_TEST"].lower() in ("1", "true", "yes")
 TEST_TTS_MAX_CHARS = 15
 
 # True = 3-step nav (align path yaw, translate, final rotate); False = single goal to B.
 NAV_TWO_STAGE = True
 if "NAV_TWO_STAGE" in os.environ:
     NAV_TWO_STAGE = os.environ["NAV_TWO_STAGE"].lower() in ("1", "true", "yes")
+
+
+def load_showroom_test_from_config() -> bool:
+    try:
+        with open(_CONFIG_FILE, encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(data.get('showroom_test', False))
+
+
+def resolve_showroom_test() -> bool:
+    if "SHOWROOM_TEST" in os.environ:
+        return os.environ["SHOWROOM_TEST"].lower() in ("1", "true", "yes")
+    return load_showroom_test_from_config()
 
 
 def text_for_tts(text: str) -> str:
@@ -480,6 +497,9 @@ class ShowroomWorkflowNode(Node):
                 self._advance_ppt_slide(stop_idx, part_idx)
 
     def _run_mission(self) -> None:
+        global TEST
+        TEST = resolve_showroom_test()
+
         total = len(self._mission_steps)
         self.get_logger().info(f"=== Showroom mission started ({total} stops) ===")
         if self._start_message:
@@ -520,7 +540,7 @@ class ShowroomWorkflowNode(Node):
                     time.sleep(10)
                     play_video(command="PauseVideo")
                 else:
-                    time.sleep(5*60+30+3)  # 5:30 seconds
+                    time.sleep(4*60+13+3)  # 5:30 seconds  # TODO
                     play_video(command="PauseVideo")
             else:
                 time.sleep(1.0)

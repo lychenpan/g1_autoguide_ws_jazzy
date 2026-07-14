@@ -19,7 +19,13 @@ import time
 from dataclasses import dataclass, fields
 from typing import Callable, FrozenSet
 
-from tools import DEFAULT_START_MESSAGE, publish_mission_start, start_nav2_restart_async, stop_docker_container
+from tools import (
+    DEFAULT_START_MESSAGE,
+    publish_mission_start,
+    start_nav2_restart_async,
+    start_wifi_switch_async,
+    stop_docker_container,
+)
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
 
@@ -67,6 +73,9 @@ def on_combo_triggered(combo: FrozenSet[str], hold_secs: float) -> None:
     
     if {"R1", "L1", "Left"}.issubset(combo):
         stop_docker_container()
+
+    if {"R1", "L1", "A"}.issubset(combo):
+        start_wifi_switch_async()
 
 
 @dataclass

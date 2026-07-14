@@ -1,3 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+
+bash "/workspace/g1_ws_jazzy/tools/ros_log_cleanup.sh"
+
 ros2 launch /workspace/g1_ws_jazzy/g1_api_nav2/unitree_slam_bringup_jazzy.launch.py \
   bridge_output:=own_log \
   nav2_output:=both \
