@@ -21,6 +21,7 @@ from typing import Callable, FrozenSet
 
 from tools import (
     DEFAULT_START_MESSAGE,
+    handle_showroom_test_toggle,
     publish_mission_start,
     start_nav2_restart_async,
     start_wifi_switch_async,
@@ -59,6 +60,7 @@ def send_voice_state(state: str) -> None:
     r.raise_for_status()
     logger.info("voice response: %s", r.json())
 
+
 def on_combo_triggered(combo: FrozenSet[str], hold_secs: float) -> None:
     """Called once when any 3-button combo is held long enough."""
     combo_str = "   ".join(sorted(combo))
@@ -76,6 +78,9 @@ def on_combo_triggered(combo: FrozenSet[str], hold_secs: float) -> None:
 
     if {"R1", "L1", "A"}.issubset(combo):
         start_wifi_switch_async()
+
+    if {"R1", "L1", "B"}.issubset(combo):
+        handle_showroom_test_toggle()
 
 
 @dataclass

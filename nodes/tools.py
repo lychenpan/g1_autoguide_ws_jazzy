@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -42,6 +43,9 @@ WIFI_CANDIDATES = ("展厅专用", "BIFNC Guest")
 NMCLI_BIN = "nmcli"
 # connection up needs root; uses passwordless sudo (see tools/sudoers-g1-wifi-nmcli)
 NMCLI_SUDO = ("sudo", "-n", "/usr/bin/nmcli")
+CONFIG_JSON_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "tools", "config.json")
+)
 
 
 class MissionStartPublisher:
@@ -449,6 +453,34 @@ def start_wifi_switch_async() -> threading.Thread:
     )
     thread.start()
     return thread
+
+
+def toggle_showroom_test(config_path: str = CONFIG_JSON_PATH) -> bool:
+    """Flip showroom_test in tools/config.json and return the new value."""
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    new_value = not bool(data.get("showroom_test", False))
+    data["showroom_test"] = new_value
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+        f.write("\n")
+
+    logger.info("showroom_test toggled to %s in %s", new_value, config_path)
+    return new_value
+
+
+def handle_showroom_test_toggle() -> None:
+    """Toggle showroom_test and speak the new value."""
+    try:
+        new_value = toggle_showroom_test()
+    except Exception as exc:
+        logger.exception("Failed to toggle showroom_test: %s", exc)
+        speak_tts("Failed to change showroom test")
+        return
+
+    speak_tts(f"showroom test set to {str(new_value).lower()}")
 
 
 if __name__ == "__main__":
